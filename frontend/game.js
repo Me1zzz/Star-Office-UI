@@ -935,6 +935,9 @@ function fetchAgents() {
           }
         }
       }
+      if (window.StarRuntimeGameBridge) {
+        window.StarRuntimeGameBridge.fetchRuntimeOverviewForGame();
+      }
     })
     .catch(error => {
       console.error('拉取 agents 失败:', error);
@@ -953,6 +956,9 @@ function renderAgent(agent) {
   const area = agent.area || 'breakroom';
   const authStatus = agent.authStatus || 'pending';
   const isMain = !!agent.isMain;
+  const runtimeItem = window.StarRuntimeGameBridge ? window.StarRuntimeGameBridge.getRuntimeItem(agentId) : null;
+  const selectionKey = (runtimeItem && (runtimeItem.selectionKey || runtimeItem.runId || runtimeItem.agentId)) || agentId;
+  const isSelected = !!(window.StarRuntimeGameBridge && window.StarRuntimeGameBridge.getSelectedRuntimeKey() === selectionKey);
 
   // 获取这个 agent 在区域里的位置
   const pos = getAreaPosition(area, agent._slotIndex || 0);
@@ -1003,6 +1009,15 @@ function renderAgent(agent) {
     statusDot.name = 'statusDot';
 
     container.add([starIcon, statusDot, nameTag]);
+    container.setSize(Math.max(60, name.length * 10), 52);
+    container.setInteractive({ useHandCursor: true });
+    container.on('pointerdown', () => {
+      if (window.StarRuntimeGameBridge) {
+        window.StarRuntimeGameBridge.selectRuntime(agentId, selectionKey);
+        window.StarRuntimeGameBridge.showRuntimeTooltip(game, agent, window.StarRuntimeGameBridge.getRuntimeItem(agentId), container.x, container.y);
+      }
+      renderAgent(agent);
+    });
     agents[agentId] = container;
   } else {
     // 更新 agent
@@ -1026,6 +1041,22 @@ function renderAgent(agent) {
       if (authStatus === 'rejected') dotColor = 0xef4444;
       if (authStatus === 'offline') dotColor = 0x94a3b8;
       statusDot.fillColor = dotColor;
+    }
+  }
+
+  const container = agents[agentId];
+  if (container) {
+    const starIcon = container.getAt(0);
+    const statusDot = container.getAt(1);
+    const nameTag = container.getAt(2);
+    if (starIcon && starIcon.setTint) {
+      starIcon.setTint(isSelected ? 0xb7f7c2 : bodyColor);
+    }
+    if (nameTag && nameTag.setFill) {
+      nameTag.setFill(isSelected ? '#ecfccb' : '#' + (NAME_TAG_COLORS[authStatus] || NAME_TAG_COLORS.default).toString(16).padStart(6, '0'));
+    }
+    if (statusDot) {
+      statusDot.setStrokeStyle(2, isSelected ? 0x22c55e : 0x000000, alpha);
     }
   }
 }

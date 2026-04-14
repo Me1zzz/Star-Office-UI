@@ -11,6 +11,7 @@
 
 import json
 import os
+import sqlite3
 import time
 import sys
 from datetime import datetime
@@ -56,6 +57,8 @@ LOCAL_STATUS_URL = os.environ.get("OFFICE_LOCAL_STATUS_URL", "http://127.0.0.1:1
 # 可选：直接指定本地状态文件路径（最简单方案：绕过 /status 鉴权）
 LOCAL_STATE_FILE = os.environ.get("OFFICE_LOCAL_STATE_FILE", "")
 VERBOSE = os.environ.get("OFFICE_VERBOSE", "0") in {"1", "true", "TRUE", "yes", "YES"}
+LOCAL_OPENCODE_DB_PATH = os.environ.get("OFFICE_OPENCODE_DB_PATH", os.path.join(os.path.expanduser("~"), ".local", "share", "opencode", "opencode.db"))
+LOCAL_GIT_OPENCODE_FILE = os.environ.get("OFFICE_PROJECT_ID_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".git", "opencode"))
 
 
 def load_local_state():
@@ -204,13 +207,56 @@ def fetch_local_status():
     return {"state": "idle", "detail": "待命中"}
 
 
+def discover_local_runtime(status_data):
+    runtime = {
+        "provider": "none",
+        "phase": (status_data or {}).get("state", "idle"),
+        "headline": (status_data or {}).get("detail", "") or "待命中",
+        "detail": (status_data or {}).get("detail", "") or "",
+    }
+    try:
+        if not os.path.exists(LOCAL_GIT_OPENCODE_FILE) or not os.path.exists(LOCAL_OPENCODE_DB_PATH):
+            return runtime
+        with open(LOCAL_GIT_OPENCODE_FILE, "r", encoding="utf-8") as f:
+            project_id = (f.read() or "").strip()
+        if not project_id:
+            return runtime
+        conn = sqlite3.connect(LOCAL_OPENCODE_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT id, title, parent_id, time_updated FROM session WHERE project_id = ? ORDER BY time_updated DESC LIMIT 1",
+                (project_id,),
+            ).fetchone()
+            if not row:
+                return runtime
+            runtime.update({
+                "provider": "opencode",
+                "sessionId": row["id"],
+                "runId": row["id"],
+                "headline": row["title"] or runtime["headline"],
+                "summary": row["title"] or runtime["headline"],
+                "parentRunId": row["parent_id"],
+                "updatedAt": datetime.fromtimestamp((row["time_updated"] or 0) / 1000).isoformat() if row["time_updated"] else None,
+                "projectId": project_id,
+            })
+        finally:
+            conn.close()
+    except Exception as e:
+        if VERBOSE:
+            print(f"[runtime-source:fallback] {e}")
+    return runtime
+
+
 def do_join(local):
     import requests
+    status_data = fetch_local_status()
     payload = {
         "name": local.get("agentName", AGENT_NAME),
         "joinKey": local.get("joinKey", JOIN_KEY),
-        "state": "idle",
-        "detail": "刚刚加入"
+        "state": status_data.get("state", "idle"),
+        "detail": status_data.get("detail", "刚刚加入") or "刚刚加入",
+        "runtime": discover_local_runtime(status_data),
     }
     r = requests.post(f"{OFFICE_URL}{JOIN_ENDPOINT}", json=payload, timeout=10)
     if r.status_code in (200, 201):
@@ -232,7 +278,8 @@ def do_push(local, status_data):
         "joinKey": local.get("joinKey", JOIN_KEY),
         "state": status_data.get("state", "idle"),
         "detail": status_data.get("detail", ""),
-        "name": local.get("agentName", AGENT_NAME)
+        "name": local.get("agentName", AGENT_NAME),
+        "runtime": discover_local_runtime(status_data),
     }
     r = requests.post(f"{OFFICE_URL}{PUSH_ENDPOINT}", json=payload, timeout=10)
     if r.status_code in (200, 201):

@@ -1,0 +1,42 @@
+{
+  "star": {
+    "agentId": "star",
+    "runId": null,
+    "sessionId": null,
+    "backgroundTaskId": null,
+    "selectionKey": "star",
+    "rootSessionId": null,
+    "officeId": null,
+    "syntheticAgentId": null
+  },
+  "local:ses_27a77a538ffeay7UJxKJyWJ0nx": {
+    "agentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "runId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "sessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "backgroundTaskId": "bg_c2c3f7dd",
+    "selectionKey": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "rootSessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "officeId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "syntheticAgentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx"
+  },
+  "ses_27a77a538ffeay7UJxKJyWJ0nx": {
+    "agentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "runId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "sessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "backgroundTaskId": "bg_c2c3f7dd",
+    "selectionKey": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "rootSessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "officeId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "syntheticAgentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx"
+  },
+  "bg_c2c3f7dd": {
+    "agentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "runId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "sessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "backgroundTaskId": "bg_c2c3f7dd",
+    "selectionKey": "local:ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "rootSessionId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "officeId": "ses_27a77a538ffeay7UJxKJyWJ0nx",
+    "syntheticAgentId": "local:ses_27a77a538ffeay7UJxKJyWJ0nx"
+  }
+}

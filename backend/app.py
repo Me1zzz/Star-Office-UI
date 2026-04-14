@@ -15,6 +15,13 @@ import threading
 from pathlib import Path
 from security_utils import is_production_mode, is_strong_secret, is_strong_drawer_pass
 from memo_utils import get_yesterday_date_str, sanitize_content, extract_memo_from_file
+from runtime_routes import (
+    build_status_response,
+    build_runtime_overview_response,
+    build_runtime_detail_response,
+    build_runtime_mappings_response,
+)
+from opencode_local_watcher import get_local_watcher
 from store_utils import (
     load_agents_state as _store_load_agents_state,
     save_agents_state as _store_save_agents_state,
@@ -42,6 +49,7 @@ FRONTEND_ELECTRON_STANDALONE_FILE = os.path.join(FRONTEND_DIR, "electron-standal
 STATE_FILE = os.path.join(ROOT_DIR, "state.json")
 AGENTS_STATE_FILE = os.path.join(ROOT_DIR, "agents-state.json")
 JOIN_KEYS_FILE = os.path.join(ROOT_DIR, "join-keys.json")
+RUNTIME_MAPPINGS_FILE = os.path.join(ROOT_DIR, "runtime-mappings.json")
 FRONTEND_PATH = Path(FRONTEND_DIR)
 ASSET_ALLOWED_EXTS = {".png", ".webp", ".jpg", ".jpeg", ".gif", ".svg", ".avif"}
 ASSET_TEMPLATE_ZIP = os.path.join(ROOT_DIR, "assets-replace-template.zip")
@@ -67,6 +75,7 @@ AUTO_ROTATE_MIN_INTERVAL_SECONDS = int(os.getenv("AUTO_ROTATE_MIN_INTERVAL_SECON
 _last_home_rotate_at = 0
 ASSET_DEFAULTS_FILE = os.path.join(ROOT_DIR, "asset-defaults.json")
 RUNTIME_CONFIG_FILE = os.path.join(ROOT_DIR, "runtime-config.json")
+GIT_OPENCODE_FILE = os.path.join(ROOT_DIR, ".git", "opencode")
 
 # Canonical agent states: single source of truth for validation and mapping
 VALID_AGENT_STATES = frozenset({"idle", "writing", "researching", "executing", "syncing", "error"})
@@ -147,8 +156,19 @@ DEFAULT_STATE = {
     "state": "idle",
     "detail": "等待任务中...",
     "progress": 0,
-    "updated_at": datetime.now().isoformat()
+    "updated_at": datetime.now().isoformat(),
 }
+
+
+def get_opencode_project_id():
+    if not os.path.exists(GIT_OPENCODE_FILE):
+        return None
+    try:
+        with open(GIT_OPENCODE_FILE, "r", encoding="utf-8") as f:
+            value = (f.read() or "").strip()
+            return value or None
+    except Exception:
+        return None
 
 
 def load_state():
@@ -221,6 +241,25 @@ def save_state(state: dict):
     """Save state to file"""
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def save_runtime_mappings_snapshot(items: dict):
+    try:
+        with open(RUNTIME_MAPPINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(items or {}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def load_runtime_mappings_snapshot():
+    if not os.path.exists(RUNTIME_MAPPINGS_FILE):
+        return {}
+    try:
+        with open(RUNTIME_MAPPINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def ensure_electron_standalone_snapshot():
@@ -885,7 +924,36 @@ def get_agents():
     save_agents_state(cleaned_agents)
     save_join_keys(keys_data)
 
-    return jsonify(cleaned_agents)
+    watcher = get_local_watcher()
+    synthetic_overview = watcher.get_overview(project_id=get_opencode_project_id(), directory=None)
+    synthetic_agents = []
+    for item in synthetic_overview:
+        synthetic_agents.append({
+            "agentId": item.get("agentId"),
+            "name": item.get("agentName") or "OpenCode Session",
+            "isMain": False,
+            "state": item.get("phase") or "idle",
+            "detail": item.get("headline") or item.get("detail") or "",
+            "updated_at": item.get("updatedAt") or datetime.now().isoformat(),
+            "area": state_to_area(item.get("phase") or item.get("status") or "idle"),
+            "source": "opencode-local-watcher",
+            "authStatus": "approved",
+            "synthetic": True,
+            "identityType": "synthetic",
+            "officeId": item.get("officeId"),
+            "rootSessionId": item.get("rootSessionId"),
+            "runtime": {
+                "sessionId": (item.get("source") or {}).get("sessionId"),
+                "runId": item.get("runId"),
+                "rootSessionId": item.get("rootSessionId"),
+                "officeId": item.get("officeId"),
+                "provider": (item.get("source") or {}).get("provider") or "opencode-local-watcher",
+                "headline": item.get("headline"),
+                "detail": item.get("detail"),
+            },
+        })
+
+    return jsonify(cleaned_agents + synthetic_agents)
 
 
 @app.route("/agent-approve", methods=["POST"])
@@ -962,6 +1030,7 @@ def join_agent():
         state = data.get("state", "idle")
         detail = data.get("detail", "")
         join_key = data.get("joinKey", "").strip()
+        runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else None
 
         # Normalize state early for compatibility
         state = normalize_agent_state(state)
@@ -1053,6 +1122,8 @@ def join_agent():
                 existing["authApprovedAt"] = datetime.now().isoformat()
                 existing["authExpiresAt"] = (datetime.now() + timedelta(hours=24)).isoformat()
                 existing["lastPushAt"] = datetime.now().isoformat()  # join 视为上线，纳入并发/离线判定
+                if runtime is not None:
+                    existing["runtime"] = runtime
                 if not existing.get("avatar"):
                     import random
                     existing["avatar"] = random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"])
@@ -1076,7 +1147,8 @@ def join_agent():
                     "authApprovedAt": datetime.now().isoformat(),
                     "authExpiresAt": (datetime.now() + timedelta(hours=24)).isoformat(),
                     "lastPushAt": datetime.now().isoformat(),
-                    "avatar": random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"])
+                    "avatar": random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"]),
+                    "runtime": runtime or {},
                 })
 
             key_item["used"] = True
@@ -1146,11 +1218,37 @@ def leave_agent():
 @app.route("/status", methods=["GET"])
 def get_status():
     """Get current main state (backward compatibility). Optionally include officeName from IDENTITY.md."""
-    state = load_state()
-    office_name = get_office_name_from_identity()
-    if office_name:
-        state["officeName"] = office_name
-    return jsonify(state)
+    return jsonify(build_status_response(load_state, get_office_name_from_identity, get_opencode_project_id))
+
+
+@app.route("/runtime/overview", methods=["GET"])
+def runtime_overview():
+    """Get normalized runtime overview for office list/selection UI."""
+    try:
+        return jsonify(build_runtime_overview_response(load_state, load_agents_state, get_office_name_from_identity, save_runtime_mappings_snapshot, get_opencode_project_id))
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/runtime/agents/<string:identifier>", methods=["GET"])
+def runtime_agent_detail(identifier: str):
+    """Get normalized runtime detail for a selected agent or run."""
+    try:
+        payload = build_runtime_detail_response(identifier, load_state, load_agents_state, get_office_name_from_identity, save_runtime_mappings_snapshot, get_opencode_project_id)
+        if not payload:
+            return jsonify({"ok": False, "msg": "未找到对应运行对象"}), 404
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+@app.route("/runtime/mappings", methods=["GET"])
+def runtime_mappings():
+    """Expose current runtime identifier mappings for diagnostics and fallback refresh."""
+    try:
+        return jsonify(build_runtime_mappings_response(load_runtime_mappings_snapshot, get_opencode_project_id))
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
 
 
 @app.route("/agent-push", methods=["POST"])
@@ -1175,6 +1273,7 @@ def agent_push():
         state = (data.get("state") or "").strip()
         detail = (data.get("detail") or "").strip()
         name = (data.get("name") or "").strip()
+        runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else None
 
         if not agent_id or not join_key or not state:
             return jsonify({"ok": False, "msg": "缺少 agentId/joinKey/state"}), 400
@@ -1224,6 +1323,8 @@ def agent_push():
         target["area"] = state_to_area(state)
         target["source"] = "remote-openclaw"
         target["lastPushAt"] = datetime.now().isoformat()
+        if runtime is not None:
+            target["runtime"] = runtime
 
         save_agents_state(agents)
         return jsonify({"ok": True, "agentId": agent_id, "area": target.get("area")})
