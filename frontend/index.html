@@ -3454,6 +3454,8 @@ function toggleBrokerPanel() {
         }
 
         const getRuntimeItemByAgentId = (agentId) => window.getRuntimeItemByAgentId ? window.getRuntimeItemByAgentId(agentId) : null;
+        const getRuntimeOfficeById = (officeId) => window.getRuntimeOfficeById ? window.getRuntimeOfficeById(officeId) : null;
+        const getOfficeMembers = (officeId) => window.getOfficeMembers ? window.getOfficeMembers(officeId) : [];
         const getSelectedRuntimeKey = () => window.getSelectedRuntimeKey ? window.getSelectedRuntimeKey() : '';
         const getSelectedOfficeId = () => window.__starRuntimeInspectorState ? (window.__starRuntimeInspectorState.selectedOfficeId || '') : '';
         const escapeHtml = (value) => window.escapeRuntimeHtml ? window.escapeRuntimeHtml(value) : String(value ?? '');
@@ -3464,10 +3466,26 @@ function toggleBrokerPanel() {
 
             const visitors = getMergedVisitors();
             const selectedOfficeId = getSelectedOfficeId();
+            const officeMembers = selectedOfficeId ? getOfficeMembers(selectedOfficeId) : [];
+            const visitorMap = new Map(visitors.map(agent => [agent.agentId, agent]));
             const filteredVisitors = selectedOfficeId
-                ? visitors.filter(agent => {
-                    const runtimeItem = getRuntimeItemByAgentId(agent.agentId);
-                    return runtimeItem && runtimeItem.officeId === selectedOfficeId;
+                ? officeMembers.map(member => {
+                    const existing = visitorMap.get(member.agentId);
+                    if (existing) return existing;
+                    return {
+                        agentId: member.agentId || member.selectionKey || member.runId,
+                        name: member.agentName || member.runId || 'Office Member',
+                        authStatus: 'approved',
+                        state: member.phase || member.status || 'idle',
+                        synthetic: !member.agentId || !!member.synthetic,
+                        rootSessionId: member.rootSessionId,
+                        officeId: member.officeId,
+                        officeLocalId: member.officeLocalId,
+                        updated_at: member.updatedAt,
+                        runtimeMember: true,
+                        runtimeSelectionKey: member.selectionKey || member.runId || member.agentId,
+                        runtimeRole: member.officeRole,
+                    };
                 })
                 : visitors;
             if (filteredVisitors.length === 0) {
@@ -3497,20 +3515,25 @@ function toggleBrokerPanel() {
                 const statusText = statusMap[authStatus] || authStatus;
                 const stateText = stateMap[state] || state;
                 const subtitle = `${statusText} · ${stateText}`;
-                const runtimeItem = getRuntimeItemByAgentId(agent.agentId);
+                const runtimeItem = getRuntimeItemByAgentId(agent.agentId) || (agent.runtimeSelectionKey ? { selectionKey: agent.runtimeSelectionKey, officeId: agent.officeId, officeLocalId: agent.officeLocalId, rootSessionId: agent.rootSessionId, officeRole: agent.runtimeRole, phase: agent.state, status: authStatus, headline: agent.detail || '' } : null);
                 const runtimeLine = runtimeItem ? `${runtimeItem.status || 'idle'} · ${runtimeItem.phase || state} · ${runtimeItem.headline || runtimeItem.detail || '暂无运行态摘要'}` : '暂无运行态摘要';
                 const selectionKey = runtimeItem ? (runtimeItem.selectionKey || runtimeItem.agentId || '') : (agent.agentId || '');
                 const currentSelectedRuntimeKey = getSelectedRuntimeKey();
                 const isSelected = !!currentSelectedRuntimeKey && currentSelectedRuntimeKey === selectionKey;
                 const syntheticBadge = agent.synthetic ? '<span style="display:inline-block;margin-left:6px;padding:1px 4px;border:1px solid #22c55e;border-radius:4px;color:#bbf7d0;font-size:10px;">本机会话</span>' : '';
-                const officeHint = agent.synthetic && agent.rootSessionId ? `<div class="guest-agent-runtime">Office: ${escapeHtml(agent.rootSessionId)}</div>` : '';
+                const officeObj = getRuntimeOfficeById(runtimeItem && runtimeItem.officeId ? runtimeItem.officeId : (agent.officeId || ''));
+                const officeLabel = (officeObj && officeObj.officeLabel) || (runtimeItem && (runtimeItem.officeLocalId || runtimeItem.rootSessionId)) || agent.officeLocalId || agent.rootSessionId || '-';
+                const officeRoleLabel = (runtimeItem && runtimeItem.officeRole) || agent.runtimeRole || '';
+                const officeHint = (runtimeItem && runtimeItem.rootSessionId) || agent.rootSessionId
+                    ? `<div class="guest-agent-runtime">Office: ${escapeHtml(officeLabel)} · ${escapeHtml(officeRoleLabel)}</div>`
+                    : '';
 
-                const pendingActions = agent.synthetic
+                const pendingActions = agent.synthetic || agent.runtimeMember
                     ? `<button onclick="event.stopPropagation(); alert('Synthetic office agent 由 watcher 自动生成，不能手动离开')">自动发现</button>`
                     : `<button onclick="event.stopPropagation(); alert('交换 skill 功能开发中')">交换skill</button><button class="leave-btn" onclick="event.stopPropagation(); leaveGuestAgent('${agent.agentId}','${name}')">离开房间</button>`;
 
                 return `
-                  <div class="guest-agent-item ${isSelected ? 'selected' : ''}" data-name="${name}" data-agent-id="${agent.agentId}" onclick="selectRuntimeByAgent('${agent.agentId}')">
+                  <div class="guest-agent-item ${isSelected ? 'selected' : ''}" data-name="${name}" data-agent-id="${agent.agentId}" onclick="${selectionKey ? `selectRuntimeByKey('${selectionKey}')` : `selectRuntimeByAgent('${agent.agentId}')`}">
                     <div>
                       <div class="guest-agent-name">${name}${syntheticBadge}</div>
                       <div style="font-size:11px;color:#cbd5e1;">${subtitle}</div>
@@ -3588,9 +3611,22 @@ function toggleBrokerPanel() {
             if (!game) return;
             const visitors = getMergedVisitors();
             const seenIds = new Set();
+            const selectedOfficeId = getSelectedOfficeId();
+            const officeMembers = selectedOfficeId ? getOfficeMembers(selectedOfficeId) : [];
+            const visitorMap = new Map(visitors.map(agent => [agent.agentId, agent]));
+            const renderVisitors = selectedOfficeId
+                ? officeMembers.map(member => visitorMap.get(member.agentId) || {
+                    agentId: member.agentId || member.selectionKey || member.runId,
+                    name: member.agentName || member.runId || 'Office Member',
+                    authStatus: 'approved',
+                    state: member.phase || member.status || 'idle',
+                    synthetic: !member.agentId || !!member.synthetic,
+                    runtimeSelectionKey: member.selectionKey || member.runId || member.agentId,
+                  })
+                : visitors;
             let idxBreak = 0, idxWrite = 0, idxError = 0;
 
-            visitors.forEach(agent => {
+            renderVisitors.forEach(agent => {
                 const id = agent.agentId;
                 seenIds.add(id);
 
@@ -3653,7 +3689,9 @@ function toggleBrokerPanel() {
                     if (sprite.setInteractive) {
                         sprite.setInteractive({ useHandCursor: true });
                         sprite.on('pointerdown', () => {
-                            if (typeof selectRuntimeByAgent === 'function') {
+                            if (agent.runtimeSelectionKey && typeof selectRuntimeByKey === 'function') {
+                                selectRuntimeByKey(agent.runtimeSelectionKey);
+                            } else if (typeof selectRuntimeByAgent === 'function') {
                                 selectRuntimeByAgent(agent.agentId);
                             }
                         });
@@ -3677,7 +3715,9 @@ function toggleBrokerPanel() {
                     if (nameText.setInteractive) {
                         nameText.setInteractive({ useHandCursor: true });
                         nameText.on('pointerdown', () => {
-                            if (typeof selectRuntimeByAgent === 'function') {
+                            if (agent.runtimeSelectionKey && typeof selectRuntimeByKey === 'function') {
+                                selectRuntimeByKey(agent.runtimeSelectionKey);
+                            } else if (typeof selectRuntimeByAgent === 'function') {
                                 selectRuntimeByAgent(agent.agentId);
                             }
                         });

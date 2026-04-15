@@ -147,6 +147,8 @@ http://127.0.0.1:19000/runtime/overview
 - `synthetic`
 - `rootSessionId`
 - `officeId`
+- `officeLocalId`
+- `serverOrigin`
 - `source.provider`
 
 #### 你应该怎么理解
@@ -159,7 +161,8 @@ http://127.0.0.1:19000/runtime/overview
   "identityType": "synthetic",
   "synthetic": true,
   "rootSessionId": "ses_xxx",
-  "officeId": "ses_xxx"
+  "officeLocalId": "ses_xxx",
+  "officeId": "local.default:ses_xxx"
 }
 ```
 
@@ -213,6 +216,8 @@ http://127.0.0.1:19000
 
 - `Identity`
 - `Office`
+- `Office Local`
+- `Server`
 - `Root Session`
 - `Session`
 - `Task`
@@ -227,6 +232,8 @@ http://127.0.0.1:19000
 - `raw.opencode`
 - `raw.familySessions`
 - `session.childSessionIds`
+- `lineage`
+- `office`
 - `edges`
 
 ---
@@ -276,9 +283,10 @@ local:<rootSessionId>
 如果你看到：
 
 - `rootSessionId = ses_abc`
-- `officeId = ses_abc`
+- `officeLocalId = ses_abc`
+- `officeId = local.default:ses_abc`
 
-这就说明当前 office 主键绑定的是 root session。
+这就说明当前 office 语义绑定的是 root session，并且正式主键已经带了 server namespace。
 
 ### 2. 看 inspector Summary
 
@@ -286,6 +294,11 @@ Summary 里如果显示：
 
 - `Office = ses_abc`
 - `Root Session = ses_abc`
+
+或者：
+
+- `Office = local.default:ses_abc`
+- `Office Local = ses_abc`
 
 就说明这个 synthetic office 是按 root session 物化的。
 
@@ -323,6 +336,7 @@ python "backend/opencode_local_watcher_check.py"
 - `enabled: true`
 - `count > 0`
 - `sampleRootSessionId`
+- `sampleOfficeLocalId`
 - `sampleOfficeId`
 
 说明 watcher 已经能 materialize synthetic offices。
@@ -339,6 +353,7 @@ http://127.0.0.1:19000/runtime/mappings
 - `items`
 - `rootSessionId`
 - `officeId`
+- `lineageBySessionId`
 
 ### 4. 打开 overview
 
@@ -350,6 +365,8 @@ http://127.0.0.1:19000/runtime/overview
 
 - `synthetic = true`
 - `identityType = synthetic`
+- `officeLocalId`
+- `officeId`
 
 ### 5. 打开前端
 
@@ -473,5 +490,5 @@ watcher 模式下你要记住的只有一句：
 只要理解这一点，你就知道：
 
 - 为什么会出现 synthetic office agents
-- 为什么 inspector 里有 `Office / Root Session`
+- 为什么 inspector 里有 `Office / Office Local / Root Session / Server`
 - 为什么 child/grandchild session 不会自动拆成新的独立房间

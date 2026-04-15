@@ -23,6 +23,8 @@ REQUIRED_ENDPOINTS = [
     ("GET", "/health", 200),
     ("GET", "/status", 200),
     ("GET", "/agents", 200),
+    ("GET", "/runtime/overview", 200),
+    ("GET", "/runtime/mappings", 200),
     ("GET", "/yesterday-memo", 200),
 ]
 
@@ -65,6 +67,36 @@ def main() -> int:
             failures.append(f"{method} {path}: expected {expected}, got {code}, body={body[:200]}")
         else:
             print(f"  OK  {method} {path} -> {code}")
+
+    code, body = req("GET", base + "/runtime/overview", token=token)
+    if code == 200:
+        try:
+            payload = json.loads(body)
+            if not isinstance(payload, dict) or not payload.get("ok"):
+                failures.append("GET /runtime/overview returned non-ok payload")
+            elif not isinstance(payload.get("items"), list):
+                failures.append("GET /runtime/overview missing items list")
+            elif "offices" not in payload or not isinstance(payload.get("offices"), list):
+                failures.append("GET /runtime/overview missing offices list")
+            else:
+                print("  OK  /runtime/overview payload contains items + offices")
+        except Exception as e:
+            failures.append(f"GET /runtime/overview invalid JSON: {e}")
+
+    code, body = req("GET", base + "/runtime/mappings", token=token)
+    if code == 200:
+        try:
+            payload = json.loads(body)
+            if not isinstance(payload, dict) or not payload.get("ok"):
+                failures.append("GET /runtime/mappings returned non-ok payload")
+            elif not isinstance(payload.get("items"), dict):
+                failures.append("GET /runtime/mappings missing items map")
+            elif "lineageBySessionId" not in payload or not isinstance(payload.get("lineageBySessionId"), dict):
+                failures.append("GET /runtime/mappings missing lineageBySessionId map")
+            else:
+                print("  OK  /runtime/mappings payload contains items + lineageBySessionId")
+        except Exception as e:
+            failures.append(f"GET /runtime/mappings invalid JSON: {e}")
 
     # non-destructive state update probe
     code, body = req("POST", base + "/set_state", {"state": "idle", "detail": "smoke-check"}, token=token)

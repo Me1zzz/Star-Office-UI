@@ -1,6 +1,7 @@
 (function () {
   const state = {
     runtimeOverview: [],
+    runtimeOffices: [],
     selectedRuntimeKey: '',
     runtimeTooltip: null,
   };
@@ -11,6 +12,7 @@
       .then(data => {
         if (!data || !data.ok || !Array.isArray(data.items)) return [];
         state.runtimeOverview = data.items;
+        state.runtimeOffices = Array.isArray(data.offices) ? data.offices : [];
         return state.runtimeOverview;
       })
       .catch(error => {
@@ -25,6 +27,13 @@
       ? state.runtimeOverview.filter(item => item && item.officeId === selectedOfficeId)
       : state.runtimeOverview;
     return items.find(item => item && item.agentId === agentId) || null;
+  }
+
+  function getOfficeMembers() {
+    const selectedOfficeId = window.__starRuntimeInspectorState ? (window.__starRuntimeInspectorState.selectedOfficeId || '') : '';
+    return selectedOfficeId
+      ? state.runtimeOverview.filter(item => item && item.officeId === selectedOfficeId)
+      : state.runtimeOverview;
   }
 
   function getSelectedRuntimeKey() {
@@ -63,6 +72,7 @@
   window.StarRuntimeGameBridge = {
     fetchRuntimeOverviewForGame,
     getRuntimeItem,
+    getOfficeMembers,
     getSelectedRuntimeKey,
     showRuntimeTooltip,
     selectRuntime,

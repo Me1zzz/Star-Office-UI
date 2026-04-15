@@ -15,6 +15,8 @@ import re
 import sqlite3
 from typing import Any
 
+from runtime_lineage_resolver import build_office_identity, discover_opencode_db_path as discover_lineage_db_path, get_server_origin, query_session_family, resolve_runtime_lineage
+
 
 RUNTIME_STATUS_ORDER = {"error": 5, "running": 4, "waiting": 3, "idle": 2, "done": 1, "offline": 0}
 
@@ -23,18 +25,7 @@ _RUNTIME_INDEX_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _discover_opencode_db_path() -> str | None:
-    for key in OPENCODE_DB_ENV_KEYS:
-        value = (os.environ.get(key) or "").strip()
-        if value and os.path.exists(value):
-            return value
-
-    candidates = [
-        os.path.join(os.path.expanduser("~"), ".local", "share", "opencode", "opencode.db"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
+    return discover_lineage_db_path()
 
 
 def _sqlite_fetch_all(db_path: str, query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -72,75 +63,32 @@ def _millis_to_iso(value: Any) -> str | None:
 
 
 def _query_session_tree(session_id: str) -> dict[str, Any] | None:
-    db_path = _discover_opencode_db_path()
-    if not db_path or not session_id:
-        return None
-
-    sessions = _sqlite_fetch_all(
-        db_path,
-        "SELECT id, parent_id, title, project_id, directory, time_created, time_updated FROM session WHERE id = ? OR parent_id = ? ORDER BY time_updated DESC",
-        (session_id, session_id),
-    )
-    if not sessions:
-        return None
-
-    session_ids = [row["id"] for row in sessions if row.get("id")]
-    placeholders = ",".join("?" for _ in session_ids)
-    messages = _sqlite_fetch_all(
-        db_path,
-        f"SELECT id, session_id, time_created, time_updated, data FROM message WHERE session_id IN ({placeholders}) ORDER BY time_created ASC",
-        tuple(session_ids),
-    ) if session_ids else []
-    parts = _sqlite_fetch_all(
-        db_path,
-        f"SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id IN ({placeholders}) ORDER BY time_created ASC",
-        tuple(session_ids),
-    ) if session_ids else []
-
-    message_map: dict[str, dict[str, Any]] = {}
-    for row in messages:
-        data = _load_json_text(row.get("data"))
-        message_map[row["id"]] = {
-            "id": row["id"],
-            "session_id": row.get("session_id"),
-            "time_created": row.get("time_created"),
-            "time_updated": row.get("time_updated"),
-            "data": data,
-            "parts": [],
-        }
-
-    for row in parts:
-        message_id = row.get("message_id")
-        if not message_id or message_id not in message_map:
-            continue
-        message_map[message_id]["parts"].append({
-            "id": row.get("id"),
-            "session_id": row.get("session_id"),
-            "time_created": row.get("time_created"),
-            "time_updated": row.get("time_updated"),
-            "data": _load_json_text(row.get("data")),
-        })
-
-    return {
-        "db_path": db_path,
-        "sessions": sessions,
-        "messages": list(message_map.values()),
-    }
+    return query_session_family(session_id)
 
 
-def _extract_session_runtime(session_tree: dict[str, Any], root_session_id: str) -> dict[str, Any]:
+def _extract_session_runtime(session_tree: dict[str, Any], subject_session_id: str, lineage: dict[str, Any] | None = None) -> dict[str, Any]:
     sessions = session_tree.get("sessions") or []
     messages = session_tree.get("messages") or []
-    root = next((row for row in sessions if row.get("id") == root_session_id), None)
-    child_session_ids = [row.get("id") for row in sessions if row.get("parent_id") == root_session_id and row.get("id")]
+    lineage_data = deepcopy(lineage or session_tree.get("lineage") or {})
+    root_session_id = _coerce_text(lineage_data.get("rootSessionId") or session_tree.get("rootSessionId"), "").strip() or subject_session_id
+    office_identity = build_office_identity(root_session_id, _coerce_text(lineage_data.get("serverOrigin") or session_tree.get("serverOrigin"), "").strip() or get_server_origin())
+    by_session_id = {row.get("id"): row for row in sessions if row.get("id")}
+    root = next((row for row in sessions if row.get("id") == root_session_id), None) or by_session_id.get(root_session_id)
+    subject = by_session_id.get(subject_session_id) or root
+    child_session_ids = [row.get("id") for row in sessions if row.get("parent_id") == subject_session_id and row.get("id")]
+    family_session_ids = [row.get("id") for row in sessions if row.get("id")]
+    descendant_session_ids = [sid for sid in (lineage_data.get("descendantSessionIds") or family_session_ids) if sid and sid != subject_session_id]
+    ancestor_session_ids = [sid for sid in (lineage_data.get("ancestorSessionIds") or []) if sid]
     edges = [
         {
-            "fromRunId": root_session_id,
+            "fromRunId": _coerce_text(row.get("parent_id"), root_session_id),
             "toRunId": child_id,
             "kind": "child",
             "label": "子会话",
         }
-        for child_id in child_session_ids
+        for row in sessions
+        for child_id in [row.get("id")]
+        if row.get("parent_id") and child_id
     ]
 
     events: list[dict[str, Any]] = []
@@ -235,19 +183,32 @@ def _extract_session_runtime(session_tree: dict[str, Any], root_session_id: str)
 
                 if tool_name in {"call_omo_agent", "task"} and delegated_session_id:
                     edges.append({
-                        "fromRunId": root_session_id,
+                        "fromRunId": _coerce_text(part.get("session_id") or message.get("session_id"), subject_session_id),
                         "toRunId": delegated_session_id,
                         "kind": "delegated",
                         "label": f"{tool_name} 委派",
                     })
 
-    title = _coerce_text((root or {}).get("title"), root_session_id)
-    updated_at = _millis_to_iso((root or {}).get("time_updated"))
-    headline = title or (text_messages[0]["text"] if text_messages else root_session_id)
+    title = _coerce_text((subject or {}).get("title"), _coerce_text((root or {}).get("title"), subject_session_id))
+    updated_at = _millis_to_iso((subject or {}).get("time_updated")) or _millis_to_iso((root or {}).get("time_updated"))
+    headline = title or (text_messages[0]["text"] if text_messages else subject_session_id)
     detail = text_messages[0]["text"] if text_messages else title
+    office_role = _coerce_text(lineage_data.get("officeRole"), "") or ("root" if subject_session_id == root_session_id else "descendant")
     return {
-        "runId": root_session_id,
-        "sessionId": root_session_id,
+        "runId": subject_session_id,
+        "sessionId": subject_session_id,
+        "serverOrigin": office_identity.get("serverOrigin"),
+        "rootSessionId": root_session_id,
+        "officeLocalId": office_identity.get("officeLocalId"),
+        "officeId": office_identity.get("officeId"),
+        "officeRole": office_role,
+        "lineageDepth": lineage_data.get("lineageDepth"),
+        "lineageConfidence": lineage_data.get("lineageConfidence"),
+        "lineageSource": lineage_data.get("lineageSource"),
+        "lineagePath": [sid for sid in (lineage_data.get("lineagePath") or ([root_session_id] if root_session_id else [])) if sid],
+        "ancestorSessionIds": ancestor_session_ids,
+        "familySessionIds": family_session_ids,
+        "descendantSessionIds": descendant_session_ids,
         "childSessionIds": child_session_ids,
         "headline": headline,
         "detail": detail,
@@ -258,13 +219,15 @@ def _extract_session_runtime(session_tree: dict[str, Any], root_session_id: str)
         "thinking": thinking,
         "messages": text_messages,
         "tools": tools,
-        "delegatedRunIds": delegated_run_ids or child_session_ids,
+        "delegatedRunIds": delegated_run_ids,
         "childRunIds": child_session_ids,
         "backgroundTaskId": background_task_ids[0] if background_task_ids else None,
         "opencode": {
             "sessions": sessions,
             "messageCount": len(messages),
             "dbPath": session_tree.get("db_path"),
+            "rootSessionId": root_session_id,
+            "familySessionIds": family_session_ids,
         },
         "edges": edges,
     }
@@ -344,12 +307,22 @@ def _enrich_runtime(agent: dict[str, Any], is_main: bool = False) -> dict[str, A
 
     if session_id:
         session_tree = _query_session_tree(session_id)
+        lineage = resolve_runtime_lineage(runtime, _discover_opencode_db_path(), runtime.get("serverOrigin") or get_server_origin())
         if session_tree:
-            db_runtime = _extract_session_runtime(session_tree, session_id)
+            db_runtime = _extract_session_runtime(session_tree, session_id, lineage)
             db_runtime.update(runtime)
             runtime = db_runtime
             runtime["sessionId"] = session_id
             runtime.setdefault("runId", session_id)
+        else:
+            runtime.update({k: v for k, v in lineage.items() if v is not None})
+    else:
+        lineage = resolve_runtime_lineage(runtime, _discover_opencode_db_path(), runtime.get("serverOrigin") or get_server_origin())
+        runtime.update({k: v for k, v in lineage.items() if v is not None})
+
+    if not runtime.get("rootSessionId"):
+        lineage = resolve_runtime_lineage(runtime, _discover_opencode_db_path(), runtime.get("serverOrigin") or get_server_origin())
+        runtime.update({k: v for k, v in lineage.items() if v is not None})
 
     runtime = _merge_omo_runtime(runtime)
 
@@ -370,6 +343,10 @@ def _enrich_runtime(agent: dict[str, Any], is_main: bool = False) -> dict[str, A
             "sessionId": runtime.get("sessionId"),
             "backgroundTaskId": runtime.get("backgroundTaskId"),
             "selectionKey": runtime.get("runId") or runtime.get("sessionId") or agent.get("agentId"),
+            "rootSessionId": runtime.get("rootSessionId"),
+            "officeId": runtime.get("officeId"),
+            "officeLocalId": runtime.get("officeLocalId"),
+            "serverOrigin": runtime.get("serverOrigin"),
         }
     return runtime
 
@@ -568,6 +545,13 @@ def _build_runtime_summary(agent: dict[str, Any]) -> dict[str, Any]:
             "sessionId": session_id,
             "backgroundTaskId": background_task_id,
         },
+        "serverOrigin": runtime.get("serverOrigin") or get_server_origin(),
+        "rootSessionId": runtime.get("rootSessionId"),
+        "officeLocalId": runtime.get("officeLocalId"),
+        "officeId": runtime.get("officeId"),
+        "officeRole": runtime.get("officeRole"),
+        "lineageDepth": runtime.get("lineageDepth"),
+        "lineageConfidence": runtime.get("lineageConfidence"),
         "selectionKey": selection_key,
     }
 
@@ -645,10 +629,30 @@ def _build_runtime_detail(agent: dict[str, Any]) -> dict[str, Any]:
         "session": {
             "sessionId": _coerce_text(runtime.get("sessionId"), "").strip() or None,
             "childSessionIds": child_session_ids,
+            "descendantSessionIds": list(runtime.get("descendantSessionIds") or []),
+            "ancestorSessionIds": list(runtime.get("ancestorSessionIds") or []),
         },
         "backgroundTask": {
             "taskId": _coerce_text(runtime.get("backgroundTaskId"), "").strip() or None,
             "status": _coerce_text(runtime.get("backgroundTaskStatus"), "").strip() or None,
+        },
+        "serverOrigin": runtime.get("serverOrigin") or get_server_origin(),
+        "rootSessionId": runtime.get("rootSessionId"),
+        "officeLocalId": runtime.get("officeLocalId"),
+        "officeId": runtime.get("officeId"),
+        "officeRole": runtime.get("officeRole"),
+        "lineageDepth": runtime.get("lineageDepth"),
+        "lineageConfidence": runtime.get("lineageConfidence"),
+        "lineage": {
+            "rootSessionId": runtime.get("rootSessionId"),
+            "officeId": runtime.get("officeId"),
+            "officeLocalId": runtime.get("officeLocalId"),
+            "lineagePath": list(runtime.get("lineagePath") or []),
+            "ancestorSessionIds": list(runtime.get("ancestorSessionIds") or []),
+            "descendantSessionIds": list(runtime.get("descendantSessionIds") or []),
+            "lineageDepth": runtime.get("lineageDepth"),
+            "lineageConfidence": runtime.get("lineageConfidence"),
+            "officeRole": runtime.get("officeRole"),
         },
         "edges": _build_edges(runtime, run_id),
         "events": normalized_events,
@@ -687,8 +691,29 @@ def build_runtime_overview(main_state: dict[str, Any], agents: list[dict[str, An
     for synthetic in synthetic_agents or []:
         items.append(deepcopy(synthetic))
     items.sort(key=_stable_sort_key)
+    offices: dict[str, dict[str, Any]] = {}
     _RUNTIME_INDEX_CACHE.clear()
     for item in items:
+        office_id = item.get("officeId")
+        if office_id:
+            office = offices.setdefault(office_id, {
+                "officeId": office_id,
+                "officeLocalId": item.get("officeLocalId") or item.get("rootSessionId"),
+                "rootSessionId": item.get("rootSessionId"),
+                "serverOrigin": item.get("serverOrigin") or get_server_origin(),
+                "officeLabel": item.get("agentName") or item.get("rootSessionId") or office_id,
+                "memberCount": 0,
+                "activeMemberCount": 0,
+                "memberSelectionKeys": [],
+                "memberAgentIds": [],
+            })
+            office["memberCount"] += 1
+            if item.get("selectionKey"):
+                office["memberSelectionKeys"].append(item.get("selectionKey"))
+            if item.get("agentId"):
+                office["memberAgentIds"].append(item.get("agentId"))
+            if item.get("status") in {"running", "waiting"}:
+                office["activeMemberCount"] += 1
         index_payload = {
             "agentId": item.get("agentId"),
             "runId": item.get("runId"),
@@ -696,15 +721,18 @@ def build_runtime_overview(main_state: dict[str, Any], agents: list[dict[str, An
             "backgroundTaskId": (item.get("source") or {}).get("backgroundTaskId"),
             "selectionKey": item.get("selectionKey"),
             "rootSessionId": item.get("rootSessionId"),
+            "officeLocalId": item.get("officeLocalId"),
             "officeId": item.get("officeId"),
+            "serverOrigin": item.get("serverOrigin") or get_server_origin(),
             "syntheticAgentId": item.get("agentId") if item.get("synthetic") else None,
         }
-        for key in (item.get("selectionKey"), item.get("runId"), item.get("agentId"), (item.get("source") or {}).get("sessionId"), item.get("rootSessionId"), item.get("officeId")):
+        for key in (item.get("selectionKey"), item.get("runId"), item.get("agentId"), (item.get("source") or {}).get("sessionId"), item.get("rootSessionId"), item.get("officeLocalId"), item.get("officeId")):
             if key:
                 _RUNTIME_INDEX_CACHE[str(key)] = deepcopy(index_payload)
     return {
         "ok": True,
         "generatedAt": _safe_iso_now(),
+        "offices": list(offices.values()),
         "items": items,
     }
 
@@ -724,13 +752,27 @@ def build_runtime_detail(main_state: dict[str, Any], agents: list[dict[str, Any]
                 "backgroundTaskId": (detail.get("backgroundTask") or {}).get("taskId"),
                 "selectionKey": (detail.get("summary") or {}).get("selectionKey"),
                 "rootSessionId": detail.get("rootSessionId"),
+                "officeLocalId": detail.get("officeLocalId"),
                 "officeId": detail.get("officeId"),
+                "serverOrigin": detail.get("serverOrigin") or get_server_origin(),
                 "syntheticAgentId": detail.get("agentId") if detail.get("synthetic") else None,
             }
-            for key in (mapping.get("selectionKey"), mapping.get("runId"), mapping.get("agentId"), mapping.get("sessionId"), mapping.get("backgroundTaskId"), mapping.get("rootSessionId"), mapping.get("officeId")):
+            for key in (mapping.get("selectionKey"), mapping.get("runId"), mapping.get("agentId"), mapping.get("sessionId"), mapping.get("backgroundTaskId"), mapping.get("rootSessionId"), mapping.get("officeLocalId"), mapping.get("officeId")):
                 if key:
                     _RUNTIME_INDEX_CACHE[str(key)] = deepcopy(mapping)
-            return {"ok": True, "generatedAt": _safe_iso_now(), "item": detail}
+            return {
+                "ok": True,
+                "generatedAt": _safe_iso_now(),
+                "item": detail,
+                "subject": detail,
+                "office": {
+                    "officeId": detail.get("officeId"),
+                    "officeLocalId": detail.get("officeLocalId"),
+                    "rootSessionId": detail.get("rootSessionId"),
+                    "serverOrigin": detail.get("serverOrigin") or get_server_origin(),
+                },
+                "lineage": deepcopy(detail.get("lineage") or {}),
+            }
 
     main_agent = next((a for a in agents if a.get("isMain")), None)
     synthetic_main = deepcopy(main_agent or {})
@@ -758,10 +800,22 @@ def build_runtime_detail(main_state: dict[str, Any], agents: list[dict[str, Any]
                         "sessionId": (detail.get("session") or {}).get("sessionId"),
                         "backgroundTaskId": (detail.get("backgroundTask") or {}).get("taskId"),
                         "selectionKey": summary.get("selectionKey"),
+                        "rootSessionId": detail.get("rootSessionId"),
+                        "officeLocalId": detail.get("officeLocalId"),
+                        "officeId": detail.get("officeId"),
+                        "serverOrigin": detail.get("serverOrigin") or get_server_origin(),
                     }
             return {
                 "ok": True,
                 "generatedAt": _safe_iso_now(),
                 "item": detail,
+                "subject": detail,
+                "office": {
+                    "officeId": detail.get("officeId"),
+                    "officeLocalId": detail.get("officeLocalId"),
+                    "rootSessionId": detail.get("rootSessionId"),
+                    "serverOrigin": detail.get("serverOrigin") or get_server_origin(),
+                },
+                "lineage": deepcopy(detail.get("lineage") or {}),
             }
     return None

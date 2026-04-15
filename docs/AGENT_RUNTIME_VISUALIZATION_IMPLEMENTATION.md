@@ -6,7 +6,7 @@
 - `frontend/index.html` 已提供运行态检查器，支持 Summary / Thinking / Messages / Tools / Timeline / Raw JSON 六个标签页。
 - `frontend/index.html` 与 `frontend/game.js` 都已支持点击运行对象进行选中与高亮。
 - 后端可直接读取本机 `opencode.db`，从 `session / message / part` 表构建运行事件、子会话与委派关系。
-- `office-agent-push.py` 已可在 join/push 时自动附带本地 runtime 元数据（如 sessionId / runId / parentRunId / projectId）。
+- `office-agent-push.py` 已可在 join/push 时自动附带本地 runtime 元数据（如 sessionId / runId / parentRunId / projectId），并支持把 `rootSessionIdHint / officeIdHint / serverOrigin` 作为 lineage hints 一起上报。
 
 ## 低侵入结构说明
 
@@ -27,16 +27,16 @@
 
 ## 当前数据源优先级
 
-1. Agent 通过 `/join-agent` / `/agent-push` 上报的 `runtime` 元数据
-2. 本机 `opencode.db` 中与 `runtime.sessionId` 对应的真实 session/message/part 数据
+1. watcher / session tree / 本机 `opencode.db` 提供 canonical lineage 事实
+2. Agent 通过 `/join-agent` / `/agent-push` 上报的 `runtime` 元数据与 lineage hints
 3. 现有 `state/detail` 快照兜底
 
 ## 已知限制
 
 - 当前尚未真正接入 oh-my-openagent 的 `background_output`、`session_read`、`session_info` 等补充检索接口，仅预留了配置位与背景任务 ID 承载面。
-- `backgroundTaskId ⇄ sessionId ⇄ childSessionId ⇄ AgentRunId` 的映射目前以运行时内存与 push 元数据为主，尚未持久化为独立映射仓库。
+- `backgroundTaskId ⇄ sessionId ⇄ rootSessionId ⇄ officeId ⇄ selectionKey` 的映射目前以运行时快照与 `runtime-mappings.json` 为主，尚未持久化为独立映射仓库。
 - 状态不一致兜底校验目前主要依赖 opencode session 数据，尚未融合 OMO 的后台任务状态面。
-- `frontend/game.js` 路径只实现了最小运行态 tooltip/highlight，不包含 `index.html` 的完整 DOM inspector。
+- `frontend/game.js` 路径已接入 office-aware selection，但画布仍以轻量成员显示为主，不等同于 `index.html` 的完整 family browser。
 
 ## 回滚方式
 
@@ -58,16 +58,16 @@
 
 当前已实现第一、二批的核心基础能力：
 
-- 后端已新增 `backend/opencode_local_watcher.py`，可自动读取本机 `opencode.db`，按 `sessionId -> rootSessionId -> officeId` 生成 synthetic office agents。
-- `/agents`、`/runtime/overview`、`/runtime/agents/<identifier>`、`/runtime/mappings` 已支持 synthetic office agents 的只读合并展示。
-- 前端已支持在访客列表中识别 synthetic office agents，并在 inspector 中展示 `Identity / Office / Root Session`。
-- 前端已加入最小 root-session office selector，用于在同项目多 root session 的 synthetic offices 之间切换。
+- 后端已新增 `backend/runtime_lineage_resolver.py`，统一解析 `sessionId -> rootSessionId -> officeLocalId -> officeId`，为 watcher 与 explicit push 共享 canonical lineage 结果。
+- `backend/agent_runtime_utils.py` 已升级为 office-aware runtime normalization，显式 runtime summary/detail 现在也会带 `serverOrigin / rootSessionId / officeLocalId / officeId / officeRole / lineage*` 字段。
+- `/runtime/overview` 已开始输出 `offices + items` 双层读模型；`/runtime/agents/<identifier>` 已开始输出 `subject / office / lineage / item` 结构；`/runtime/mappings` 已新增 `lineageBySessionId`。
+- 前端 selector 已切换为优先消费 `offices`，访客列表与 inspector 已开始以 office family 视角展示成员、ancestors / descendants / delegated lineage。
 
 当前仍未完全完成的部分：
 
 - Official OpenCode session/message/project-global SSE first 路径尚未完全取代 DB-first。
 - project/global SSE 的本地增量过滤仍是下一批工作。
-- watcher 模式的完整用户手册与回滚说明仍需继续补齐。
+- 画布层当前仍以轻量 office member 可见性为主，尚未演化成完整 graph-native family canvas。
 
 ### 当前 watcher 开关
 
@@ -88,4 +88,5 @@ $env:STAR_OPENCODE_LOCAL_WATCHER="0"
 ```powershell
 python "backend/opencode_local_watcher_check.py"
 python "backend/runtime_adapter_check.py"
+python "backend/runtime_lineage_check.py"
 ```

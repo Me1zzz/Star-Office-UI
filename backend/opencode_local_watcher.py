@@ -22,6 +22,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from runtime_lineage_resolver import build_office_identity, get_server_origin
+
 
 DEFAULT_REFRESH_SECONDS = int(os.getenv("STAR_WATCHER_REFRESH_SECONDS", "5"))
 STALE_AFTER_SECONDS = int(os.getenv("STAR_WATCHER_STALE_AFTER_SECONDS", "45"))
@@ -310,7 +312,9 @@ class OpenCodeLocalWatcher:
         root_index = self._build_root_index(sessions)
         by_root: dict[str, list[dict[str, Any]]] = {}
         for row in sessions:
-            root_id = root_index.get(row["id"], row["id"])
+            root_id = _coerce_text(root_index.get(row["id"], row["id"]), "").strip()
+            if not root_id:
+                continue
             by_root.setdefault(root_id, []).append(row)
 
         all_session_ids = [row["id"] for row in sessions if row.get("id")]
@@ -429,6 +433,7 @@ class OpenCodeLocalWatcher:
             child_run_ids = [session_id for session_id in child_ids if session_id]
             delegated_run_ids = [sid for sid in delegated_ids if sid]
 
+            office_identity = build_office_identity(root_id, get_server_origin())
             summary = {
                 "agentId": synthetic_id,
                 "agentName": display_name,
@@ -446,8 +451,13 @@ class OpenCodeLocalWatcher:
                 "selectionKey": synthetic_id,
                 "identityType": "synthetic",
                 "synthetic": True,
+                "serverOrigin": office_identity.get("serverOrigin"),
                 "rootSessionId": root_id,
-                "officeId": root_id,
+                "officeLocalId": office_identity.get("officeLocalId"),
+                "officeId": office_identity.get("officeId"),
+                "officeRole": "root",
+                "lineageDepth": 0,
+                "lineageConfidence": "resolved",
                 "discoverySource": "watcher_db",
             }
             overview[synthetic_id] = summary
@@ -486,8 +496,13 @@ class OpenCodeLocalWatcher:
                 },
                 "identityType": "synthetic",
                 "synthetic": True,
+                "serverOrigin": office_identity.get("serverOrigin"),
                 "rootSessionId": root_id,
-                "officeId": root_id,
+                "officeLocalId": office_identity.get("officeLocalId"),
+                "officeId": office_identity.get("officeId"),
+                "officeRole": "root",
+                "lineageDepth": 0,
+                "lineageConfidence": "resolved",
             }
             detail[synthetic_id] = detail_payload
             detail[root_id] = detail_payload
@@ -496,9 +511,11 @@ class OpenCodeLocalWatcher:
                 "agentId": synthetic_id,
                 "runId": root_id,
                 "sessionId": root_id,
+                "serverOrigin": office_identity.get("serverOrigin"),
                 "rootSessionId": root_id,
                 "syntheticAgentId": synthetic_id,
-                "officeId": root_id,
+                "officeLocalId": office_identity.get("officeLocalId"),
+                "officeId": office_identity.get("officeId"),
                 "backgroundTaskId": background_task_ids[0] if background_task_ids else None,
                 "selectionKey": synthetic_id,
             }
@@ -530,8 +547,9 @@ class OpenCodeLocalWatcher:
             if identifier in self._detail_cache:
                 return deepcopy(self._detail_cache[identifier])
             mapped = self._mappings.get(identifier)
-            if mapped and mapped.get("syntheticAgentId") in self._detail_cache:
-                return deepcopy(self._detail_cache[mapped.get("syntheticAgentId")])
+            synthetic_agent_id = _coerce_text((mapped or {}).get("syntheticAgentId"), "").strip() if isinstance(mapped, dict) else ""
+            if synthetic_agent_id and synthetic_agent_id in self._detail_cache:
+                return deepcopy(self._detail_cache[synthetic_agent_id])
             return None
 
     def get_mappings(self, project_id: str | None = None, directory: str | None = None) -> dict[str, Any]:

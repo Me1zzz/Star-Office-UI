@@ -350,6 +350,7 @@ http://127.0.0.1:19000
   - `Office`
   - `Root Session`
 - 检查器顶部会出现 **Office 下拉选择器**，用于在多个 root session office 之间切换
+- 现在 selector 优先消费后端返回的 `offices`，而不是再由前端从 `items` 临时推断 office
 
 ### 当前 office 语义
 
@@ -358,6 +359,7 @@ http://127.0.0.1:19000
 - **一个 root session = 一个 office**
 - child / grandchild / delegated session 默认留在同一个 office 中
 - `project/workspace` 只用于 watcher 的 discovery/filter guard
+- office 的正式主键现在允许带 `serverOrigin` 命名空间，因此你可能会看到形如 `local.default:ses_xxx` 的 `officeId`
 
 ### 如果你想关闭 watcher，退回显式 push 模式
 
@@ -391,9 +393,14 @@ http://127.0.0.1:19000/runtime/overview
 
 返回内容包括：
 
+- `offices`
 - 全部 agent 的 runtime summary
 - selectionKey
 - runId
+- rootSessionId
+- officeLocalId
+- officeId
+- serverOrigin
 - phase
 - headline
 - detail
@@ -421,6 +428,9 @@ http://127.0.0.1:19000/runtime/agents/agent_demo
 
 返回中通常包含：
 
+- `subject`
+- `office`
+- `lineage`
 - `summary`
 - `session`
 - `backgroundTask`
@@ -446,6 +456,9 @@ http://127.0.0.1:19000/runtime/mappings
 - `sessionId`
 - `runId`
 - `selectionKey`
+- `rootSessionId`
+- `officeId`
+- `lineageBySessionId`
 
 这个接口特别适合排查“为什么某个 task 没有映射到对应 session”。
 
@@ -462,7 +475,8 @@ http://127.0.0.1:19000/runtime/mappings
 也就是说：
 
 - push 决定“谁对应哪个运行对象”
-- opencode.db 决定“这个运行对象里面发生了什么”
+- canonical lineage resolver 决定“它最终属于哪个 office family”
+- opencode.db / watcher / session tree 决定“这个运行对象里面发生了什么”
 
 如果你想尽量显示真实 opencode 数据，需要：
 
@@ -609,6 +623,9 @@ python "office-agent-push.py"
 - `sessionId`
 - `runId`
 - `parentRunId`
+- `rootSessionIdHint`
+- `officeIdHint`
+- `serverOrigin`
 - `projectId`
 - `headline`
 - `updatedAt`
@@ -624,6 +641,7 @@ http://127.0.0.1:19000
 然后点击访客列表中的 agent，重点观察：
 
 - Summary 里是否出现 `Session ID`
+- Summary 里是否出现 `Office Local / Server / Root Session`
 - Raw JSON 里是否出现 `opencode`
 - Timeline / Thinking / Tools 是否开始出现真实事件
 
@@ -650,6 +668,8 @@ http://127.0.0.1:19000/runtime/agents/<你的selectionKey或sessionId>
 
 - `events`
 - `session.childSessionIds`
+- `lineage`
+- `office`
 - `edges`
 - `raw.opencode`
 

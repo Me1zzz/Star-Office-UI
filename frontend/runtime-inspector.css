@@ -142,6 +142,7 @@
   padding: 2px 0;
   color: #cbd5e1;
   font-size: 11px;
+  align-items: flex-start;
 }
 
 .runtime-summary-label { color: #94a3b8; }

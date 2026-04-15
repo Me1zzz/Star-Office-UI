@@ -16,6 +16,8 @@ import time
 import sys
 from datetime import datetime
 
+from runtime_lineage_resolver import build_office_identity, get_server_origin
+
 # === 你需要填入的信息 ===
 JOIN_KEY = ""   # 必填：你的一次性 join key
 AGENT_NAME = "" # 必填：你在办公室里的名字
@@ -239,7 +241,13 @@ def discover_local_runtime(status_data):
                 "parentRunId": row["parent_id"],
                 "updatedAt": datetime.fromtimestamp((row["time_updated"] or 0) / 1000).isoformat() if row["time_updated"] else None,
                 "projectId": project_id,
+                "serverOrigin": get_server_origin(),
             })
+            if row["parent_id"]:
+                office_hint = build_office_identity(row["parent_id"], get_server_origin())
+                runtime["rootSessionIdHint"] = row["parent_id"]
+                runtime["officeLocalIdHint"] = office_hint.get("officeLocalId")
+                runtime["officeIdHint"] = office_hint.get("officeId")
         finally:
             conn.close()
     except Exception as e:

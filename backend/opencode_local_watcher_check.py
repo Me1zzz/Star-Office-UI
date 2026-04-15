@@ -18,6 +18,7 @@ def main():
         "sourceMode": mappings.get("sourceMode"),
         "sampleAgentId": sample.get("agentId"),
         "sampleRootSessionId": sample.get("rootSessionId"),
+        "sampleOfficeLocalId": sample.get("officeLocalId"),
         "sampleOfficeId": sample.get("officeId"),
     }, ensure_ascii=False, indent=2))
 

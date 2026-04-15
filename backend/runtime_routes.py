@@ -40,9 +40,21 @@ def build_runtime_detail_response(identifier, load_state, load_agents_state, get
     agents = load_agents_state()
     project_id = get_opencode_project_id()
     watcher = get_local_watcher()
+    direct_explicit_identifiers = set()
+    for agent in agents:
+        if agent.get("isMain"):
+            continue
+        runtime = agent.get("runtime") if isinstance(agent.get("runtime"), dict) else {}
+        for key in (
+            runtime.get("sessionId"),
+            runtime.get("runId"),
+            agent.get("agentId"),
+        ):
+            if key:
+                direct_explicit_identifiers.add(str(key))
     watcher_detail = watcher.get_detail(identifier, project_id=project_id, directory=None)
     synthetic_details = {}
-    if watcher_detail:
+    if watcher_detail and str(identifier) not in direct_explicit_identifiers:
         synthetic_details[identifier] = watcher_detail
         if watcher_detail.get("runId"):
             synthetic_details[watcher_detail.get("runId")] = watcher_detail
@@ -67,10 +79,19 @@ def build_runtime_mappings_response(load_runtime_mappings_snapshot, get_opencode
     file_items = load_runtime_mappings_snapshot()
     watcher = get_local_watcher()
     watcher_state = watcher.get_mappings(project_id=get_opencode_project_id(), directory=None)
+    merged_items = {}
+    for source in (watcher_state.get("items") or {}, file_items or {}, live_items or {}):
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            if not key:
+                continue
+            merged_items[str(key)] = value
     return {
         "ok": True,
         "generatedAt": datetime.now().isoformat(),
-        "items": live_items or file_items or watcher_state.get("items") or {},
+        "items": merged_items,
+        "lineageBySessionId": {k: v for k, v in merged_items.items() if isinstance(v, dict) and v.get("sessionId")},
         "watcher": {
             "enabled": watcher_state.get("enabled"),
             "lastRefreshAt": watcher_state.get("lastRefreshAt"),

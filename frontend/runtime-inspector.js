@@ -3,6 +3,7 @@
     if (!window.__starRuntimeInspectorState) {
       window.__starRuntimeInspectorState = {
         runtimeOverview: [],
+        runtimeOffices: [],
         selectedRuntimeKey: '',
         selectedRuntimeDetail: null,
         runtimeInspectorTab: 'summary',
@@ -34,8 +35,24 @@
     return candidates.find(item => item.officeId === state.selectedOfficeId) || candidates[0] || null;
   }
 
+  function getRuntimeOfficeById(officeId) {
+    const state = ensureState();
+    return (state.runtimeOffices || []).find(office => office && office.officeId === officeId) || null;
+  }
+
+  function getOfficeMembers(officeId) {
+    const state = ensureState();
+    return (state.runtimeOverview || []).filter(item => item && (!officeId || item.officeId === officeId));
+  }
+
   function getOfficeOptions() {
     const state = ensureState();
+    if (Array.isArray(state.runtimeOffices) && state.runtimeOffices.length) {
+      return state.runtimeOffices.map(office => ({
+        officeId: office.officeId,
+        label: office.officeLabel || office.rootSessionId || office.officeId,
+      }));
+    }
     const offices = new Map();
     for (const item of state.runtimeOverview || []) {
       if (!item || !item.officeId) continue;
@@ -115,6 +132,32 @@
 
     if (state.runtimeInspectorTab === 'summary') {
       const edges = Array.isArray(state.selectedRuntimeDetail.edges) ? state.selectedRuntimeDetail.edges : [];
+      const lineage = state.selectedRuntimeDetail.lineage || {};
+      const office = state.selectedRuntimeDetail.office || getRuntimeOfficeById(summary.officeId || state.selectedRuntimeDetail.officeId || '');
+      const descendants = lineage.descendantSessionIds || (state.selectedRuntimeDetail.session && state.selectedRuntimeDetail.session.descendantSessionIds) || [];
+      const ancestors = lineage.ancestorSessionIds || (state.selectedRuntimeDetail.session && state.selectedRuntimeDetail.session.ancestorSessionIds) || [];
+      const officeMembers = getOfficeMembers(summary.officeId || state.selectedRuntimeDetail.officeId || '');
+      const officeHtml = office
+        ? `<div class="runtime-summary-card"><div class="runtime-event-title">Office Family</div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Office Label</span><span>${escapeHtml(office.officeLabel || office.rootSessionId || office.officeId || '-')}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Members</span><span>${escapeHtml(office.memberCount || officeMembers.length || 0)}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Active</span><span>${escapeHtml(office.activeMemberCount || 0)}</span></div>
+           </div>`
+        : '';
+      const lineageHtml = (ancestors.length || descendants.length)
+        ? `<div class="runtime-summary-card"><div class="runtime-event-title">Lineage</div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Role</span><span>${escapeHtml(summary.officeRole || state.selectedRuntimeDetail.officeRole || lineage.officeRole || '-')}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Depth</span><span>${escapeHtml(summary.lineageDepth ?? state.selectedRuntimeDetail.lineageDepth ?? lineage.lineageDepth ?? '-')}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Confidence</span><span>${escapeHtml(summary.lineageConfidence || state.selectedRuntimeDetail.lineageConfidence || lineage.lineageConfidence || '-')}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Ancestors</span><span>${escapeHtml(ancestors.join(', ') || '-')}</span></div>
+             <div class="runtime-summary-row"><span class="runtime-summary-label">Descendants</span><span>${escapeHtml(descendants.join(', ') || '-')}</span></div>
+           </div>`
+        : '';
+      const membersHtml = officeMembers.length
+        ? `<div class="runtime-summary-card"><div class="runtime-event-title">Office Members</div>
+             ${officeMembers.map(member => `<div class="runtime-summary-row"><span class="runtime-summary-label">${escapeHtml(member.officeRole || 'member')}</span><span>${escapeHtml(member.agentName || member.agentId || member.runId || '-')} · ${escapeHtml(member.runId || '-')}</span></div>`).join('')}
+           </div>`
+        : '';
       const relationHtml = edges.length
         ? `<div class="runtime-summary-card"><div class="runtime-event-title">运行关系</div>${edges.map(edge => `<div class="runtime-summary-row"><span class="runtime-summary-label">${escapeHtml(edge.kind || 'edge')}</span><span>${escapeHtml(edge.label || '')} · ${escapeHtml(edge.toRunId || '-')}</span></div>`).join('')}</div>`
         : '';
@@ -125,6 +168,8 @@
           <div class="runtime-summary-row"><span class="runtime-summary-label">Agent</span><span>${escapeHtml(summary.agentName || summary.agentId || '-')}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Identity</span><span>${escapeHtml(summary.identityType || (state.selectedRuntimeDetail.synthetic ? 'synthetic' : 'explicit'))}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Office</span><span>${escapeHtml(summary.officeId || state.selectedRuntimeDetail.officeId || '-')}</span></div>
+          <div class="runtime-summary-row"><span class="runtime-summary-label">Office Local</span><span>${escapeHtml(summary.officeLocalId || state.selectedRuntimeDetail.officeLocalId || '-')}</span></div>
+          <div class="runtime-summary-row"><span class="runtime-summary-label">Server</span><span>${escapeHtml(summary.serverOrigin || state.selectedRuntimeDetail.serverOrigin || '-')}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Root Session</span><span>${escapeHtml(summary.rootSessionId || state.selectedRuntimeDetail.rootSessionId || '-')}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Selection Key</span><span>${escapeHtml(summary.selectionKey || '-')}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Run ID</span><span>${escapeHtml(summary.runId || '-')}</span></div>
@@ -132,6 +177,9 @@
           <div class="runtime-summary-row"><span class="runtime-summary-label">Task</span><span>${escapeHtml((state.selectedRuntimeDetail.backgroundTask && state.selectedRuntimeDetail.backgroundTask.taskId) || '-')}</span></div>
           <div class="runtime-summary-row"><span class="runtime-summary-label">Updated</span><span>${escapeHtml(summary.updatedAt || '-')}</span></div>
         </div>
+        ${officeHtml}
+        ${lineageHtml}
+        ${membersHtml}
         ${relationHtml}
       `;
       return;
@@ -194,8 +242,9 @@
       const response = await fetch('/runtime/overview?t=' + Date.now(), { cache: 'no-store' });
       const data = await response.json();
       state.runtimeOverview = (data && data.ok && Array.isArray(data.items)) ? data.items : [];
+      state.runtimeOffices = (data && data.ok && Array.isArray(data.offices)) ? data.offices : [];
       if (state.selectedOfficeId) {
-        const officeStillExists = state.runtimeOverview.some(item => item.officeId === state.selectedOfficeId);
+        const officeStillExists = state.runtimeOffices.some(office => office.officeId === state.selectedOfficeId) || state.runtimeOverview.some(item => item.officeId === state.selectedOfficeId);
         if (!officeStillExists) state.selectedOfficeId = '';
       }
       if (state.selectedRuntimeKey) {
@@ -266,6 +315,8 @@
 
   window.escapeRuntimeHtml = escapeHtml;
   window.getRuntimeItemByAgentId = getRuntimeItemByAgentId;
+  window.getRuntimeOfficeById = getRuntimeOfficeById;
+  window.getOfficeMembers = getOfficeMembers;
   window.fetchRuntimeOverview = fetchRuntimeOverview;
   window.fetchRuntimeDetail = fetchRuntimeDetail;
   window.selectRuntimeByKey = selectRuntimeByKey;
